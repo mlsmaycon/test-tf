@@ -1,0 +1,79 @@
+name: CI
+
+# Runs on every pull request, including PRs opened from forks.
+#
+# Fork behavior notes:
+#   * For a PR from a FORK, the GITHUB_TOKEN is read-only and repository
+#     secrets are NOT exposed to the workflow (secrets.* evaluate to "").
+#   * For a PR from a branch in THIS repo, the token is read/write and
+#     secrets ARE available.
+on:
+  pull_request:
+
+# Least-privilege by default; the auto-merge job requests what it needs.
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Request 1: an auto-merge job that is SKIPPED for fork PRs.
+  # The `if` is true only when the PR head repo == this repo (i.e. not a fork).
+  # Auto-merge needs a write token, which fork PRs never get, so we gate it.
+  # -------------------------------------------------------------------------
+  auto-merge:
+    name: Auto merge (skipped for forks)
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Confirm this only runs for same-repo PRs
+        run: |
+          echo "Not a fork -> auto-merge is allowed to run."
+          echo "head=${{ github.event.pull_request.head.repo.full_name }}"
+          echo "base=${{ github.repository }}"
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr merge --auto --squash "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"   
+  # -------------------------------------------------------------------------
+  # Request 2: validate secret access on `pull_request`.
+  # For fork PRs, MY_SECRET is empty. For same-repo PRs, it equals "yes".
+  # -------------------------------------------------------------------------
+  secret-check:
+    name: Secret check (pull_request)
+    runs-on: ubuntu-latest
+    env:
+      MY_SECRET: ${{ secrets.MY_SECRET }}
+    steps:
+      - name: Report secret availability
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Head repo: ${{ github.event.pull_request.head.repo.full_name }}"
+          echo "Base repo: ${{ github.repository }}"
+          if [ -n "$MY_SECRET" ]; then
+            echo "MY_SECRET IS available (length=${#MY_SECRET})."
+            if [ "$MY_SECRET" = "yes" ]; then
+              echo "MY_SECRET matches the expected value."
+            else
+              echo "MY_SECRET is set but does NOT match the expected value."
+            fi
+          else
+            echo "MY_SECRET is EMPTY -> this is a fork PR (secrets are not exposed)."
+          fi
+
+  # -------------------------------------------------------------------------
+  # A normal job that always runs (fork or not) so there is something for the
+  # skipped job to compare against.
+  # -------------------------------------------------------------------------
+  build:
+    name: Build (always runs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: echo "Build runs for every PR, including forks."
+
+       
