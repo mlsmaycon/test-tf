@@ -87,14 +87,19 @@ jobs:
             -f description="$desc" \
             -f target_url="$RUN_URL"
 
-      - name: Merge the PR
+      - name: Enable auto-merge on the PR
         # Merge only when both the upstream tests and the privileged tests passed.
         if: steps.test.outcome == 'success' && github.event.workflow_run.conclusion == 'success'
         run: |
-          echo "Merging PR #${{ steps.meta.outputs.number }} at ${{ steps.meta.outputs.sha }}"
-          # --match-head-commit aborts if new commits were pushed after tests
-          # ran, so we never merge untested code.
+          echo "Enabling auto-merge for PR #${{ steps.meta.outputs.number }}"
+          # Use --auto (not an immediate merge). When `main` has branch
+          # protection, a synchronous `gh pr merge` fails with
+          # "base branch policy prohibits the merge" if any required check or
+          # review is still pending. --auto queues the PR and lets GitHub merge
+          # it once all requirements are met. It also re-evaluates checks on the
+          # current head, so a commit pushed after tests won't merge untested.
+          # Requires "Allow auto-merge" to be enabled in the repository settings.
           gh pr merge "${{ steps.meta.outputs.number }}" \
             --repo "$REPO" \
             --squash \
-            --match-head-commit "${{ steps.meta.outputs.sha }}"
+            --auto
