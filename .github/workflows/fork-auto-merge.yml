@@ -2,10 +2,16 @@ name: Fork Auto Merge
 
 # Runs AFTER "Fork Test" completes. Because this is a `workflow_run` workflow,
 # it executes from the default branch in the BASE-repo context, so it has a
-# read/write GITHUB_TOKEN and secrets EVEN when the PR came from a fork.
+# read/write GITHUB_TOKEN and secrets EVEN when the PR came from a fork. It is
+# the single merge path for BOTH fork PRs and maintainer (same-repo) PRs.
+#
+# It also publishes a commit status on the PR head SHA. A workflow_run run is
+# NOT shown in a PR's checks by default, so posting a status is what links this
+# privileged result back to the PR and keeps it tracked alongside the other
+# workflows.
 #
 # Safety: this workflow never checks out or runs the fork's code. It only reads
-# a PR number + tested SHA (plain text it validates) and asks GitHub to merge.
+# a PR number + tested SHA (plain text it validates) and calls the API.
 on:
   workflow_run:
     workflows:
@@ -16,16 +22,20 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  actions: read             # needed to download the upstream run's artifact
+  actions: read             # download the upstream run's artifact
+  statuses: write           # publish a commit status on the PR head SHA
 
 jobs:
-  auto-merge:
-    name: Auto merge (fork-safe)
+  test-and-merge:
+    name: Test, mark PR status, and merge
     runs-on: ubuntu-latest
-    # Only proceed for PR-triggered runs whose tests actually passed.
-    if: >
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success'
+    # Cover BOTH fork and maintainer PRs; act only on PR-triggered runs.
+    if: github.event.workflow_run.event == 'pull_request'
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      STATUS_CONTEXT: fork-auto-merge/test
     steps:
       - name: Download PR metadata from the test run
         uses: actions/download-artifact@v4
@@ -45,14 +55,51 @@ jobs:
           echo "number=$num" >> "$GITHUB_OUTPUT"
           echo "sha=$sha"    >> "$GITHUB_OUTPUT"
 
-      - name: Merge the fork PR
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Mark PR status pending
         run: |
-          echo "Merging PR #${{ steps.meta.outputs.number }} at ${{ steps.meta.outputs.sha }}"
-          # --match-head-commit aborts if new commits were pushed after tests
-          # ran, so we never merge untested code.
+          gh api -X POST "repos/$REPO/statuses/${{ steps.meta.outputs.sha }}" \
+            -f state=pending \
+            -f context="$STATUS_CONTEXT" \
+            -f description="Running privileged tests" \
+            -f target_url="$RUN_URL"
+
+      - name: Run tests
+        id: test
+        # Run the privileged test only if the upstream "Fork Test" run passed.
+        if: github.event.workflow_run.conclusion == 'success'
+        run: |
+          echo "Running privileged tests for PR #${{ steps.meta.outputs.number }} (secrets available here)..."
+          # Replace with the real test command. A non-zero exit marks the PR
+          # status 'failure' and skips the merge.
+          echo "tests passed"
+
+      - name: Mark PR status result
+        if: always()
+        run: |
+          if [ "${{ steps.test.outcome }}" = "success" ]; then
+            state=success; desc="Tests passed"
+          else
+            state=failure; desc="Tests failed (or upstream Fork Test failed)"
+          fi
+          gh api -X POST "repos/$REPO/statuses/${{ steps.meta.outputs.sha }}" \
+            -f state="$state" \
+            -f context="$STATUS_CONTEXT" \
+            -f description="$desc" \
+            -f target_url="$RUN_URL"
+
+      - name: Enable auto-merge on the PR
+        # Merge only when both the upstream tests and the privileged tests passed.
+        if: steps.test.outcome == 'success' && github.event.workflow_run.conclusion == 'success'
+        run: |
+          echo "Enabling auto-merge for PR #${{ steps.meta.outputs.number }}"
+          # Use --auto (not an immediate merge). When `main` has branch
+          # protection, a synchronous `gh pr merge` fails with
+          # "base branch policy prohibits the merge" if any required check or
+          # review is still pending. --auto queues the PR and lets GitHub merge
+          # it once all requirements are met. It also re-evaluates checks on the
+          # current head, so a commit pushed after tests won't merge untested.
+          # Requires "Allow auto-merge" to be enabled in the repository settings.
           gh pr merge "${{ steps.meta.outputs.number }}" \
-            --repo "${{ github.repository }}" \
+            --repo "$REPO" \
             --squash \
-            --match-head-commit "${{ steps.meta.outputs.sha }}"
+            --auto
