@@ -6,4 +6,4 @@ Fork PR test: validating skipped auto-merge job, empty secret on pull_request, a
 
 Fork PR #2: validating the fork-safe auto-merge flow (Fork Test -> Fork Auto Merge via workflow_run).
 
-another test
+another test 2
