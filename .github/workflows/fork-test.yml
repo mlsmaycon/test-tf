@@ -17,19 +17,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run tests
-        run: |
-          echo "Running tests on the PR code..."
-          # Replace with the real test command; a non-zero exit fails the run
-          # and the auto-merge workflow will NOT merge.
-          echo "tests passed"
-
+      # Record metadata FIRST and upload it with `if: always()`, so the
+      # privileged "Fork Auto Merge" workflow can post a commit status back to
+      # the PR even when the tests below fail.
       - name: Record PR metadata
         run: |
           echo "${{ github.event.pull_request.number }}" > pr_number.txt
           echo "${{ github.event.pull_request.head.sha }}" > pr_head_sha.txt
 
       - name: Upload PR metadata
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pr-meta
@@ -37,3 +34,11 @@ jobs:
             pr_number.txt
             pr_head_sha.txt
           retention-days: 1
+
+      - name: Run tests
+        run: |
+          echo "Running tests on the PR code..."
+          # Replace with the real test command; a non-zero exit fails the run
+          # and the auto-merge workflow will mark the PR status failed and skip
+          # the merge.
+          echo "tests passed"

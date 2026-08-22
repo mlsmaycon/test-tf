@@ -7,39 +7,20 @@ name: CI
 #     secrets are NOT exposed to the workflow (secrets.* evaluate to "").
 #   * For a PR from a branch in THIS repo, the token is read/write and
 #     secrets ARE available.
+#
+# Auto-merge is intentionally NOT handled here. Both fork and maintainer PRs
+# are merged by the single "Fork Auto Merge" (workflow_run) flow, which has a
+# write token even for fork PRs. This removes the old same-repo-only auto-merge
+# job so there is exactly one merge path.
 on:
   pull_request:
 
-# Least-privilege by default; the auto-merge job requests what it needs.
 permissions:
   contents: read
 
 jobs:
   # -------------------------------------------------------------------------
-  # Request 1: an auto-merge job that is SKIPPED for fork PRs.
-  # The `if` is true only when the PR head repo == this repo (i.e. not a fork).
-  # Auto-merge needs a write token, which fork PRs never get, so we gate it.
-  # -------------------------------------------------------------------------
-  auto-merge:
-    name: Auto merge (skipped for forks)
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Confirm this only runs for same-repo PRs
-        run: |
-          echo "Not a fork -> auto-merge is allowed to run."
-          echo "head=${{ github.event.pull_request.head.repo.full_name }}"
-          echo "base=${{ github.repository }}"
-      - name: Enable auto-merge
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr merge --auto --squash "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"   
-  # -------------------------------------------------------------------------
-  # Request 2: validate secret access on `pull_request`.
+  # Validate secret access on `pull_request`.
   # For fork PRs, MY_SECRET is empty. For same-repo PRs, it equals "yes".
   # -------------------------------------------------------------------------
   secret-check:
@@ -65,8 +46,7 @@ jobs:
           fi
 
   # -------------------------------------------------------------------------
-  # A normal job that always runs (fork or not) so there is something for the
-  # skipped job to compare against.
+  # A normal build job that always runs (fork or not).
   # -------------------------------------------------------------------------
   build:
     name: Build (always runs)
@@ -75,5 +55,3 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: echo "Build runs for every PR, including forks."
-
-       
