@@ -1,0 +1,58 @@
+name: Fork Auto Merge
+
+# Runs AFTER "Fork Test" completes. Because this is a `workflow_run` workflow,
+# it executes from the default branch in the BASE-repo context, so it has a
+# read/write GITHUB_TOKEN and secrets EVEN when the PR came from a fork.
+#
+# Safety: this workflow never checks out or runs the fork's code. It only reads
+# a PR number + tested SHA (plain text it validates) and asks GitHub to merge.
+on:
+  workflow_run:
+    workflows:
+      - Fork Test           # must match the `name:` of fork-test.yml
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read             # needed to download the upstream run's artifact
+
+jobs:
+  auto-merge:
+    name: Auto merge (fork-safe)
+    runs-on: ubuntu-latest
+    # Only proceed for PR-triggered runs whose tests actually passed.
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Download PR metadata from the test run
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-meta
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read and validate PR metadata
+        id: meta
+        run: |
+          num="$(cat pr_number.txt)"
+          sha="$(cat pr_head_sha.txt)"
+          # Validate to avoid acting on anything unexpected from the artifact.
+          [[ "$num" =~ ^[0-9]+$ ]]            || { echo "bad PR number: $num"; exit 1; }
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]      || { echo "bad head sha: $sha"; exit 1; }
+          echo "number=$num" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha"    >> "$GITHUB_OUTPUT"
+
+      - name: Merge the fork PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Merging PR #${{ steps.meta.outputs.number }} at ${{ steps.meta.outputs.sha }}"
+          # --match-head-commit aborts if new commits were pushed after tests
+          # ran, so we never merge untested code.
+          gh pr merge "${{ steps.meta.outputs.number }}" \
+            --repo "${{ github.repository }}" \
+            --squash \
+            --match-head-commit "${{ steps.meta.outputs.sha }}"
