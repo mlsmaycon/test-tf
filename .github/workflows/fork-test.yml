@@ -1,0 +1,39 @@
+name: Fork Test
+
+# Runs on every PR, including fork PRs. Fork PRs get a READ-ONLY token and
+# NO secrets here, which is exactly what we want: untrusted code runs with no
+# privileges. This workflow only runs tests and hands off the PR number +
+# tested commit SHA to the privileged auto-merge workflow via an artifact.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        run: |
+          echo "Running tests on the PR code..."
+          # Replace with the real test command; a non-zero exit fails the run
+          # and the auto-merge workflow will NOT merge.
+          echo "tests passed"
+
+      - name: Record PR metadata
+        run: |
+          echo "${{ github.event.pull_request.number }}" > pr_number.txt
+          echo "${{ github.event.pull_request.head.sha }}" > pr_head_sha.txt
+
+      - name: Upload PR metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-meta
+          path: |
+            pr_number.txt
+            pr_head_sha.txt
+          retention-days: 1
